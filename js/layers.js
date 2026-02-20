@@ -1,202 +1,416 @@
-function createLayers() {
-	let seed = getSeed();
-	let layersForEffects = [["NONE"]];
-	for (let r=1;r<=RNG_DATA.rows;r++) {
-		layersForEffects.push([]);
-		let layersInRow = RNG_DATA.layers(r);
-		for (let l=1;l<=layersInRow;l++) {
-			let rand = random(seed*random(r*l));
-			let layerName = RNG_DATA.chars[Math.floor(rand*RNG_DATA.chars.length)];
-			RNG_DATA.chars = RNG_DATA.chars.filter(x => x!=layerName);
-			let baseResNum = (r==1?0:Math.floor(rand*(Object.keys(ROW_LAYERS[r-1]).length+1)));
-			let baseResName = (baseResNum==0?"":Object.keys(ROW_LAYERS[r-1])[baseResNum-1]);
-			let layerType = r==1?"normal":RNG_DATA.types[Math.floor(rand*RNG_DATA.types.length)];
-			let layerReq;
-			if (baseResName=="") layerReq = RNG_DATA.rowReqs[r].times(rand+0.5)
-			else {
-				if (layers[baseResName].type=="static") layerReq = RNG_DATA.rowReqs[r].root(layers[baseResName].exponent).log(layers[baseResName].base).times(rand+0.5)
-				else layerReq = RNG_DATA.rowReqs[r].pow(layers[baseResName].exponent).times(rand+0.5).times(2)
-			}
-			layersForEffects[r].push(layerName);
-			
-			let layerInfo = {
-				name: layerName,
-				symbol: layerName,
-				position: (l-1),
-				color: ("#"+Math.floor(rand*16777215).toString(16)),
-				requires: layerReq,
-				resource: (layerName+" points"),
-				baseResNum: baseResNum,
-				baseResName: baseResName,
-				baseResource() { return ((this.baseResNum==0)?"points":(this.baseResName+" points")) },
-				baseAmount() { return (this.baseResNum==0?player.points:player[this.baseResName].points) },
-				type: layerType,
-				row: r,
-				layerShown() { return (r==1?true:Object.keys(ROW_LAYERS[r-1]).some(x => player[x].unlocked)) },
-				doReset(resettingLayer) {
-					let keep = [];
-					if (layers[resettingLayer].row > this.row) layerDataReset(this.name, keep)
-				},
-				startData() { return {
-					unlocked: false,
-					points: new Decimal(0),
-					best: new Decimal(0),
-					total: new Decimal(0),
-					upgrades: [],
-				}},
-				gainMult() {
-					return globalEffect(this.symbol).times(globalUpgEffect(this.symbol)).times(globalBuyableEffect(this.symbol));
-				},
-			}
-			
-			if (r>1) layerInfo.branches = [Object.keys(ROW_LAYERS[r-1])[l-1] || Object.keys(ROW_LAYERS[r-1])[Object.keys(ROW_LAYERS[r-1]).length-1]];
-			
-			if (layerType=="normal") {
-				let gainExpFactor = (rand+1.5)/3
-				layerInfo.exponent = RNG_DATA.rowBaseExps[r].times(gainExpFactor);
-			} else if (layerType=="static") {
-				let reqExpFactor = (rand+1.5)/3
-				layerInfo.base = layerInfo.requires.sqrt().div(5).plus(1);
-				layerInfo.exponent = RNG_DATA.staticRowBaseExps[r].times(reqExpFactor);
-			}
-			
-			layerInfo.hasEffect = (r==1?true:(!(!Math.round(rand))))
-			let hasUpgrades = rand<=0.7
-			let hasBuyables = rand>=0.3
-			layerInfo.overallFactor = 1/layersInRow
-			layerInfo.nonEffectFactor = (hasUpgrades||hasBuyables)?((rand+1)/(layerInfo.type=="static"?5:3)):0
-			
-			if (layerInfo.hasEffect) {
-				layerInfo.effectTarget = (r==1?"NONE":layersForEffects[r-1][Math.floor(rand*layersForEffects[r-1].length)])
-				layerInfo.effect = function(){ 
-					let l = this.layer;
-					let et = this.effectTarget;
-					let exp;
-					if (et == "NONE") exp = new Decimal(1);
-					else exp = tmp[et].exponent;
-					if (tmp[l] === undefined) return new Decimal(1);
-					let eff = new Decimal(player[l].points||0).max(0.5).plus(1)
-					if (tmp[l].type=="static") eff = Decimal.pow(tmp[l].base, eff.sub(1)).pow(tmp[l].exponent);
-					else eff = eff.root(tmp[l].exponent);
-					
-					if (et!="NONE" ? tmp[et].type=="static" : false) eff = eff.pow(RNG_DATA.rowLayerTotalMultExps[tmp[l].row].times(1-this.nonEffectFactor).times(layerInfo.overallFactor));
-					else eff = eff.pow(exp).pow(RNG_DATA.rowLayerTotalMultExps[tmp[l].row].times(1-this.nonEffectFactor).times(layerInfo.overallFactor));
-					return eff
-				};
-				layerInfo.effectDescription = function() {
-					let tg = this.effectTarget;
-					if (tg=="NONE") tg = "point";
-					else {
-						tg = tg+" point"
-						if (tmp[this.effectTarget].type=="static") return "which divide the "+tg+" requirement by "+format(tmp[this.layer].effect);
-					}
-					return "which multiply "+tg+" gain by "+format(tmp[this.layer].effect);
-				};
-			}
-			
-			if (hasUpgrades) {
-				let uLeft = layerInfo.nonEffectFactor/(hasBuyables?2:1);
-				layerInfo.upgrades = {
-					rows: Math.floor(random(rand*seed)*Math.min(layerInfo.row+1, 4)+1),
-					cols: Math.floor(random((1-rand)*seed)*Math.min(layerInfo.row+1, 4)+1),
-				}
-				for (let upgRow=1;upgRow<=layerInfo.upgrades.rows;upgRow++) {
-					for (let upgCol=1;upgCol<=layerInfo.upgrades.cols;upgCol++) {
-						let upgRand = random(seed*upgRow*upgCol);
-						let id = upgRow*10+upgCol;
-						let et = (r==1?"NONE":layersForEffects[r-1][Math.floor((1-upgRand)*layersForEffects[r-1].length)]);
-						let sourceID = Math.round(upgRand*r);
-						let sourceName = (sourceID==0?"NONE":layersForEffects[sourceID][Math.floor(upgRand*layersForEffects[sourceID].length)]);
-						let isFinal = (upgRow == layerInfo.upgrades.rows) && (upgCol == layerInfo.upgrades.cols);
-						let internalUpgFactor = isFinal?uLeft:(upgRand/(layerInfo.upgrades.rows*layerInfo.upgrades.cols));
-						layerInfo.upgrades[id] = {
-							unlocked() { return player[this.layer].unlocked },
-							et: et,
-							sourceName: sourceName,
-							iuf: internalUpgFactor*layerInfo.overallFactor,
-							layer: layerInfo.name,
-							title: layerInfo.name+String(id),
-							description() { return ((et!="NONE"?tmp[et].type=="static":false)?("Divide "+(et=="NONE"?"point":(et+" point"))+" requirement"):("Multiply "+(et=="NONE"?"point":(et+" point"))+" gain"))+" based on "+(sourceName=="NONE"?"points":(sourceName+" points"))},
-							cost: (r>1&&id==11&&!layerInfo.hasEffect)?new Decimal(1):(Decimal.mul(Decimal.pow(1.4, Decimal.pow((upgRow-1)*layerInfo.upgrades.cols+upgCol, 2)), 2-upgRand).round()),
-							effect() { 
-								let exp;
-								if (this.et == "NONE") exp = new Decimal(1);
-								else exp = tmp[this.et].exponent;
-								let amt;
-								if (this.sourceName == "NONE") amt = player.points;
-								else amt = player[this.sourceName].points;
-								eff = new Decimal(amt||0).max(0.5).plus(1)
-								if (this.sourceName!="NONE" ? tmp[this.sourceName].type=="static" : false) eff = Decimal.pow(tmp[this.sourceName].base, eff).pow(tmp[this.sourceName].exponent).pow(exp).pow(RNG_DATA.rowLayerTotalMultExps[tmp[this.layer].row].times(this.iuf))
-								else eff = eff.root((this.sourceName=="NONE")?1:tmp[this.sourceName].exponent).pow(exp).pow(RNG_DATA.rowLayerTotalMultExps[tmp[this.layer].row].times(this.iuf)) 
-								return eff;
-							},
-							effectDisplay() { return format(tmp[this.layer].upgrades[this.id].effect)+"x" },
+
+function createBasicLayer(s, w, state){
+	return {
+		symbol: s, resource: w, 
+		color: ("#"+((myRandomInt()%127)+127).toString(16)+((myRandomInt()%127)+127).toString(16)+((myRandomInt()%127)+127).toString(16)),
+		hotkeys: [{key: s, description: `${s}: Reset for ${w}`, onPress(){if (canReset(this.layer)) doReset(this.layer)}},],
+
+		doReset(resettingLayer){
+			let keep = keepUpgradeQOL(this.layer);
+			if(layers[resettingLayer].row > this.row) layerDataReset(this.layer, keep) 
+		},
+		layerShown() {
+			if(this.row==1) return true;
+			return player[this.baseResName].unlocked;
+		}, 
+		resetsNothing() {return hasResetNothingQOL(this.layer)},
+		
+        startData() { return {
+            unlocked: false,
+			points: new Decimal(0),
+            best: new Decimal(0),
+            total: new Decimal(0)
+        }},
+		gainMult() {
+			return getLayerMult(this.layer);
+		},
+		row: state.row, position: state.layer,
+		
+		//using only for the respec button:
+		buyables: {
+			showRespec: true,
+			respec() {
+				player[this.layer].upgrades = [];
+				doReset(this.layer, true)
+			},
+		},
+		tabFormat: {
+			"Main": {
+				content: [
+					"main-display",
+					"prestige-button",
+					"blank",
+					"milestones",
+					"blank",
+					"upgrades",
+					"buyables",
+				],
+			},
+			"Breakdown": {
+				content: [["raw-html",function(){
+					let eff = new Decimal(1);
+					let text = `<table><caption>This Layer's Reductions</caption><thead><tr>
+							<th width="100px">Effect</th>
+							<th width="100px">Owner</th>
+							<th width="100px">Source</th>
+							<th width="300px">Source Amount</th>
+						</tr></thead>`;
+					//get effects from layers
+					target = this.layer;
+					for (let l in layers) {
+						if(!tmp[l].effectTargets){continue;}
+						
+						for(let t of tmp[l].effectTargets){
+							if(t === target){
+								eff = eff.times(tmp[l].effect);
+								text += `<tr><td>/${format(tmp[l].effect)}</td><td>${l}@${tmp[l].row}</td><td>${l}@${tmp[l].row}</td><td>${format(player[l].points)} ${tmp[l].resource}</td></tr>\n`;
+								break;
+							}
 						}
-						uLeft = Math.max(uLeft-internalUpgFactor, 0);
 					}
-				}
-			}
-			
-			if (hasBuyables) {
-				let uLeft = layerInfo.nonEffectFactor/(hasUpgrades?2:1);
-				layerInfo.buyables = {
-					rows: Math.floor(random(rand*Math.pow(seed, 2))*Math.min(layerInfo.row+1, 3)+1),
-					cols: Math.floor(random((1-rand)*Math.pow(seed, 2))*Math.min(layerInfo.row+1, 3)+1),
-				}
-				for (let bRow=1;bRow<=layerInfo.buyables.rows;bRow++) {
-					for (let bCol=1;bCol<=layerInfo.buyables.cols;bCol++) {
-						let bblRand = random(Math.sqrt(seed)*bRow*bCol)
-						let id = bRow*10+bCol;
-						let et = (r==1?"NONE":layersForEffects[r-1][Math.floor((1-bblRand)*layersForEffects[r-1].length)]);
-						let isFinal = (bRow == layerInfo.buyables.rows) && (bCol == layerInfo.buyables.cols);
-						let internalBblFactor = isFinal?uLeft:(bblRand/(layerInfo.buyables.rows*layerInfo.buyables.cols));
-						layerInfo.buyables[id] = {
-							et: et,
-							iuf: internalBblFactor*layerInfo.overallFactor,
-							layer: layerInfo.name,
-							title: layerInfo.name+String(id)+"b",
-							unlocked() { return player[this.layer].unlocked }, 
-							canAfford() { return player[this.layer].points.gte(tmp[this.layer].buyables[this.id].cost) },
-							buy() { 
-								cost = tmp[this.layer].buyables[this.id].cost
-								player[this.layer].points = player[this.layer].points.sub(cost)	
-								player[this.layer].buyables[this.id] = player[this.layer].buyables[this.id].add(1)
-								player[this.layer].spentOnBuyables = player[this.layer].spentOnBuyables.add(cost) 
-							},
-							costStart: (r>1&&id==11&&!hasUpgrades&&!layerInfo.hasEffect)?new Decimal(1):(Decimal.pow(2*(1-internalBblFactor)+1, (bRow-1)*layerInfo.buyables.cols+bCol).div(hasUpgrades?1:2)),
-							costBase: Decimal.pow(5, ((2-bblRand)/3)*internalBblFactor),
-							effDesc() {
-								let stat = (et=="NONE")?false:tmp[et].type=="static";
-								return (stat?("Divides "+(et=="NONE"?"point":(et+" point"))+" requirement"):("Multiplies "+(et=="NONE"?"point":(et+" point"))+" gain"))+" by "+format(tmp[this.layer].buyables[this.id].effect);
-							},
-							display() {
-								let data = tmp[this.layer].buyables[this.id];
-								return "Cost: "+formatWhole(data.cost)+" "+tmp[this.layer].symbol+" points\n\
-								Amount: "+formatWhole(player[this.layer].buyables[this.id])+"\n"+data.effDesc
-							},
-							cost(x=player[this.layer].buyables[this.id]) {
-								let data = tmp[this.layer].buyables[this.id];
-								let costStart = this.costStart;
-								let costBase = this.costBase;
-								return Decimal.pow(costBase, x).times(costStart).round();
-							},
-							effect() { 
-								let exp;
-								if (this.et == "NONE") exp = new Decimal(1);
-								else exp = tmp[this.et].exponent;
-								let bought = player[this.layer].buyables[this.id];
-								eff = layers[this.layer].buyables[this.id].cost(bought.sub(1)).times(bought.gte(1)?bought.min(5):0).plus(bought.gte(1)?0:1).root(tmp[this.layer].exponent).pow(exp).pow(RNG_DATA.rowLayerTotalMultExps[tmp[this.layer].row].times(this.iuf))
-								return eff;
-							},
+					text += "<tr><td>&nbsp;</td></tr>";
+					//get effects from upgrades
+					for (let l in layers) {
+						if(!tmp[l].upgrades){continue;}
+						let upgrades = [11,12,13,14,15];
+						for(let u of upgrades){
+							if(!hasUpgrade(l,u)){continue;}
+							let upgrade = tmp[l].upgrades[u];
+							if(upgrade.target === target){
+								if(target === '') eff = eff.times(upgrade.effect);
+								else {
+									eff = eff.times(upgrade.effect);
+									text += `<tr><td>/${format(upgrade.effect)}</td><td>${l}@${tmp[l].row}</td><td>${upgrade.source}@${tmp[upgrade.source].row}</td><td>${format(player[upgrade.source].points)} ${tmp[upgrade.source].resource}</tr>\n`;
+								}
+							}
 						}
-						uLeft = Math.max(uLeft-internalBblFactor, 0);
 					}
-				}
-			}
-			
-			addLayer(layerName, layerInfo)
+					text += "<tr><td>&nbsp;</td></tr>";
+					//get effects from achievements
+					let achEffect = new Decimal(1.1).pow(Object.values(player.completedSeeds).filter(x => x === target).length);
+					eff = eff.times(achEffect);
+					text += `<tr><td>/${format(achEffect)}</td><td>&nbsp;</td><td>achievements</td><td>${Object.values(player.completedSeeds).filter(x => x === target).length} seeds</td></tr>\n`;
+					text += "<tr><td>&nbsp;</td></tr>";
+					text += `<tfoot><tr><td>/${format(eff)}</td><td colspan="3">Total Cost Reduction</td></tr></tfoot></table>`;
+					return text;
+				}]],
+			},
 		}
 	}
 }
 
-createLayers();
+function staticLayerStuff(state){
+	return {
+		type: "static",
+        exponent: new Decimal(1.01), 
+        base: new Decimal(1.2),
+		autoPrestige(){return hasAutoPrestigeQOL(this.layer)},
+		canBuyMax() {return hasCanBuyMaxQOL(this.layer)}, roundUpCost: false,
+	}
+}
+
+function prestigeRequirements(r,prevRow, a){
+	//row 1: always ''. Otherwise, something random from the previous row.
+	let baseResNum = (r===1?"":myRandomInt()%prevRow.length);
+	let baseResName = (r===1?"":prevRow[baseResNum]);
+	return {
+		baseResName: baseResName,
+        requires(){
+			return new Decimal(4);
+		}, 
+		action: a,
+		baseResource() { return ((this.baseResName==='')?"points":(tmp[this.baseResName].resource)) },
+		baseAmount() { return (this.baseResName===''?player.points:player[this.baseResName]?.points || 0) },
+		resetDescription() {return `${this.action} ${this.row===1 ? 'points' : tmp[this.baseResName].resource}<br>-><br>`}
+	}
+}
+function layerPointEffect(){
+	return {
+		effectTargets: [''],
+        effect() {
+			if(this.baseResName===''){
+				return new Decimal(1).add(player[this.layer].points.times(0.02));
+			}
+			let upgrades = [11,12,13,14,15];
+			let boughtUpgrades = upgrades.reduce((total,u) => {return total + (hasUpgrade(this.layer,u) ? 1 : 0)});
+			// 1 + 0.001 *(2row + upgrades - 2targRow)
+			return new Decimal(1 + Math.max(0.001, 0.001 * (2 + boughtUpgrades))).pow(player[this.layer].points);
+		},
+        effectDescription() { // Optional text to describe the effects
+			let tg = this.baseResName;
+			return tg==='' ?
+				`which multiply point gain by ${format(tmp[this.layer].effect)}` : 
+				`which divide the linked requirements by ${format(tmp[this.layer].effect)}`;
+        },
+	}
+}
+
+function createOneLayer(state, prevRow){
+	let layerName = RNG_DATA.chars[myRandomInt()%RNG_DATA.chars.length];
+	let layerWord = RNG_DATA.words[myRandomInt()%RNG_DATA.words.length];
+	let layerAction = RNG_DATA.actions[myRandomInt()%RNG_DATA.actions.length];
+	RNG_DATA.chars = RNG_DATA.chars.filter(x => x!=layerName);
+	RNG_DATA.words = RNG_DATA.words.filter(x => x!=layerWord);
+	
+	let layerInfo = {
+		...createBasicLayer(layerName, layerWord, state),
+		...staticLayerStuff(state),
+		...prestigeRequirements(state.row, prevRow, layerAction),
+		...layerPointEffect(),
+	}
+
+	return layerInfo;
+}
+
+//QOL bonuses to add:
+//order:
+	//keep upgrades
+	//reset nothing
+	//buy max
+	//auto prestige
+// each achievement for that layer increases gain by 1.01x/divides req by 1.01x
+
+function createMilestones(l){
+	//milestones are just temp QOL
+	//order:
+	//buy max 
+	//keep upgrades
+	//reset nothing
+	//auto prestige
+	return {
+		0: {requirementDescription: `1 ${l.resource}`,
+			done() {return player[this.layer].best.gte(1) || Object.values(player.completedSeeds).filter(x => x === l.symbol).length > this.id}, // Used to determine when to give the milestone
+			effectDescription: "Enable buy max for the previous layers.",
+		},
+		1: {requirementDescription: `2 ${l.resource}`,
+			done() {return player[this.layer].best.gte(2) || Object.values(player.completedSeeds).filter(x => x === l.symbol).length > this.id},
+			effectDescription: "Keep upgrades from the previous layers on any reset.",
+		},
+		2: {requirementDescription: `4 ${l.resource}`,
+			done() {return player[this.layer].best.gte(4) || Object.values(player.completedSeeds).filter(x => x === l.symbol).length > this.id},
+			effectDescription: "Resets on the previous layers reset nothing.",
+		},
+		3: {requirementDescription: `8 ${l.resource}`,
+			done() {return player[this.layer].best.gte(8) || Object.values(player.completedSeeds).filter(x => x === l.symbol).length > this.id},
+			effectDescription: "Auto prestige the previous layers.",
+		},
+	}
+}
+
+const effects = [
+	{
+		//increase a layer by best
+		description(){
+			return `Decrease ${tmp[this.target].resource} requirement based on ${tmp[this.source].resource}.`;
+		},
+		effect(){
+			let upgrades = [11,12,13,14,15];
+			let boughtUpgrades = upgrades.reduce((total,u) => {return total + (hasUpgrade(this.layer,u) ? 1 : 0)});
+			// 1 + 0.001 *(2row + upgrades - 2targRow)
+			return new Decimal(1 + Math.max(0.001, 0.001 * (tmp[this.source].row + tmp[this.layer].row + boughtUpgrades - tmp[this.target].row - tmp[this.target].row))).pow(player[this.source].points);
+		}
+	}
+];
+function createAnUpgrade(targets){
+	let source = targets[myRandomInt()%targets.length];
+	let target = targets[myRandomInt()%targets.length];
+	let effect = effects[0];
+
+	return {
+		source: source,
+		target: target,
+		...effect,
+		cost(){
+			//choosable: buying one increases the costs of the others
+			let count = 0; let upgrades = [11,12,13,14,15];
+			for(let u of upgrades){ if(hasUpgrade(this.layer,u)){
+				count++;
+			}}
+			return new Decimal(2).pow(count);
+		},
+		unlocked() { return true }, // The upgrade is only visible when this is true
+		effectDisplay() { 
+			if(this.target === '') return `${format(this.effect())}x`;
+			return `/${format(this.effect())}`;
+		},
+	}
+}
+function createUpgrades(targets, l){
+	let ids = [11,12,13,14,15];
+	let result = {rows:1,cols:5};
+
+	for(let u of ids){
+		result[u] = createAnUpgrade(targets);
+	}
+	return result;
+}
+
+function fixRow(rowLayers, preLayers){
+	//things to do after creating all the layers in the row:
+
+	//go back and add upgrades
+	let targets = [];
+	for(let r of preLayers){
+		for(let l of r){
+			targets.push(l.symbol);
+		}
+	}
+	for(let l of rowLayers){
+		l.upgrades = createUpgrades(targets, l.symbol);
+	}
+
+	//guard against no previous layer
+	if(preLayers.length < 2){return;}
+
+	//create milestones
+	for(let l of rowLayers){
+		l.milestones = createMilestones(l);
+	}
+
+	//go back and add branches
+	//collect connections from current row to prev row
+	let collected = new Set();
+	for(let l of rowLayers){
+		collected.add(l.baseResName);
+		l.branches = [];
+		l.branches.push([l.baseResName,1]);
+		l.effectTargets = [l.baseResName];
+	}
+	//then, create remaining qol connections from prev row to current row.
+	for(let l of preLayers[preLayers.length-2]){
+		if(!collected.has(l.symbol)){
+			//get a random layer from rowLayers, and add the connection.
+			let qolConnection = myRandomInt() % rowLayers.length;
+			rowLayers[qolConnection].branches.push([l.symbol,3]);
+			rowLayers[qolConnection].effectTargets.push(l.symbol);
+		}
+	}
+
+}
+
+function addFinalLayer(prevRow){
+
+	let baseResName = prevRow[myRandomInt()%prevRow.length].symbol;
+	let branches = [];
+	for(let l of prevRow){
+		branches.push([l.symbol,l.symbol === baseResName ? 1 : 2 ]);
+	}
+	addLayer('!',{
+		symbol: '!', resource: "", 
+		color: "#FFFFFF",
+
+		resetDesc: 'Complete the seed!',
+		doReset(resettingLayer){
+			if(layers[resettingLayer].row > this.row) layerDataReset(this.layer, []) 
+		},
+		layerShown() {
+			return player[this.baseResName]?.unlocked;
+		}, 
+		resetsNothing() {return false},
+		
+        startData() { return {
+            unlocked: false,
+			points: new Decimal(0),
+            best: new Decimal(0),
+            total: new Decimal(0),
+        }},
+		row: 13,
+
+		baseResName: baseResName,
+        requires(){
+			return new Decimal(6);
+		}, 
+		baseResource() { return (tmp[this.baseResName].resource) },
+		baseAmount() { return (player[this.baseResName]?.points || 0) },
+
+		type: "normal",
+		branches: branches,
+		onPrestige(gain){
+			player.completedSeeds[getSeed()] = this.baseResName;
+		},
+		prestigeButtonText(){
+			return `Complete Seed #${getSeed()}`;
+		},
+		tabFormat: [
+			"blank",
+			"blank",
+			"blank",
+			"prestige-button"
+		]
+	})
+}
+
+function createSeedLayers(){
+	let seed = getSeed();
+	currentSeed = seed;
+	let state = {};
+	let preLayers = [];
+	let lastRow = [''];
+	let count = 1;
+	let rowLayers = [];
+    for(r=1; r<=12;r++){
+		rowLayers = [];
+		let numLayersInRow = (myRandomInt()%5)+1;
+		state.numLayersInRow = numLayersInRow;
+		for(l=0; l<numLayersInRow;l++){
+			state.row = r;
+			state.layer = l;
+			let newLayer = createOneLayer(state,lastRow);
+			rowLayers.push(newLayer);
+			count++;
+		}
+		preLayers.push(rowLayers);
+		lastRow = [];
+		for(let l of rowLayers){
+			lastRow.push(l.symbol);
+		}
+		fixRow(rowLayers, preLayers);
+    }
+	for(let newRow of preLayers){
+		for(let newLayer of newRow){
+			addLayer(newLayer.symbol,newLayer);
+		}
+	}
+	console.log(count);
+	addFinalLayer(rowLayers);
+}
+
+function createAchLayer(){
+	addLayer('$',{
+		symbol: '$', resource: 'Completed Seeds',
+		color: '#FFFF00', row: 'side', baseAmount(){return Object.keys(player.completedSeeds).length},
+		type: 'none',
+		startData(){
+			return {
+				unlocked: true,
+				points: new Decimal(0),
+				completed: {}
+			}
+		},
+		tooltip(){
+			return `${Object.values(player.completedSeeds).length} completed seeds`
+		},
+		tabFormat: [
+			["raw-html",function(){return `<h2>You have completed ${Object.keys(player.completedSeeds).length} seeds.</h2>`;}],
+			"blank",
+			["display-text","Each completion permanently unlocks a milestone in that layer, and divides its cost by 1.1 (multiplicative)"],
+			["raw-html",function(){
+				let effects = '';
+				for(let char of RNG_DATA.allChars){
+					let count = Object.values(player.completedSeeds).filter(x => x === char).length;
+					if(count){
+						effects += `<br>${count} ${char} completions.`
+					}
+				}
+				return effects;
+			}],
+			"blank",
+			["display-text",function(){
+				if(!Object.keys(player.completedSeeds).length) return '';
+				return 'Completed seeds: ' + Object.keys(player.completedSeeds);
+			}],
+		]
+	})
+}
+createSeedLayers();
+createAchLayer();
